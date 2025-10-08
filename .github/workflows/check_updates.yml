@@ -137,7 +137,7 @@ jobs:
         with:
           name: diff-report-pr-${{ needs.update-and-create-pr.outputs.pr_number }}
           path: diff_report_pr_${{ needs.update-and-create-pr.outputs.pr_number }}.html
-          retention-days: 400 # 报告存档保留90天
+          retention-days: 90 # 报告存档保留90天
 
   # JOB 3: 部署报告到 GitHub Pages
   deploy-report:
