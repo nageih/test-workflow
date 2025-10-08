@@ -6,6 +6,10 @@ on:
     - cron: '0 22 * * *'
   # 允许在 Actions 页面手动触发
   workflow_dispatch:
+  
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # JOB 1: 检查更新并创建 PR (此部分保持不变)
@@ -43,6 +47,10 @@ jobs:
         run: |
           PACK_ID=$(jq -r '.packId' .github/configs/modpack.json)
           echo "pack_id=$PACK_ID" >> $GITHUB_OUTPUT
+
+      - name: Clean up temporary directories
+        run: |
+          rm -rf temp_update
 
       - name: Run Update Checker Script
         id: checker
@@ -101,6 +109,10 @@ jobs:
           curl -L -o CurseTheBeast https://github.com/maxinglo/curse-the-beast/releases/download/v0.7.1/CurseTheBeast
           chmod +x ./CurseTheBeast
           echo "$(pwd)" >> $GITHUB_PATH
+      
+      - name: Clean up old archives
+        run: |
+          rm -f old_version.zip new_version.zip
 
       - name: Download old and new archives
         run: |
