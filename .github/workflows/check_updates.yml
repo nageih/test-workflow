@@ -1,0 +1,162 @@
+name: Check for Modpack Updates
+
+on:
+  schedule:
+    # 每天北京时间6点运行 (UTC 22:00)
+    - cron: '0 22 * * *'
+  # 允许在 Actions 页面手动触发
+  workflow_dispatch:
+
+jobs:
+  # JOB 1: 检查更新并创建 PR (此部分保持不变)
+  update-and-create-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      pr_number: ${{ steps.create_pr.outputs.pr_number }}
+      local_version_id: ${{ steps.checker.outputs.local_version_id }}
+      new_version_id: ${{ steps.checker.outputs.new_version_id }}
+      pack_id: ${{ steps.read_config.outputs.pack_id }}
+      # 以下两个输出为了在最后评论时能显示整合包信息
+      pack_name: ${{ steps.checker.outputs.pack_name }}
+      new_version: ${{ steps.checker.outputs.new_version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3'
+
+      - name: Download CurseTheBeast
+        run: |
+          curl -L -o CurseTheBeast https://github.com/maxinglo/curse-the-beast/releases/download/v0.7.1/CurseTheBeast
+          chmod +x ./CurseTheBeast
+          echo "$(pwd)" >> $GITHUB_PATH
+
+      - name: Read Pack ID from config
+        id: read_config
+        run: |
+          PACK_ID=$(jq -r '.packId' .github/configs/modpack.json)
+          echo "pack_id=$PACK_ID" >> $GITHUB_OUTPUT
+
+      - name: Run Update Checker Script
+        id: checker
+        run: python .github/scripts/update_checker.py
+
+      - name: Create Pull Request if changes were detected
+        id: create_pr
+        if: steps.checker.outputs.changes_detected == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 从脚本的输出中获取变量
+          PACK_NAME=$(echo "${{ steps.checker.outputs.pack_name }}")
+          NEW_VERSION=$(echo "${{ steps.checker.outputs.new_version }}")
+          BRANCH_NAME="autoupdate/${PACK_NAME}-${NEW_VERSION}"
+          BRANCH_NAME=$(echo "$BRANCH_NAME" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+          PR_TITLE="chore(autoupdate): Update ${PACK_NAME} to v${NEW_VERSION}"
+
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git checkout -b $BRANCH_NAME
+          git add -A ${{ steps.checker.outputs.info_file_path }}
+          git add -A ${{ steps.checker.outputs.source_dir }}
+          git commit -m "$PR_TITLE"
+          git push --force -u origin $BRANCH_NAME
+
+          # Create PR and capture its number
+          PR_URL=$(gh pr create \
+            --base main \
+            --head $BRANCH_NAME \
+            --title "$PR_TITLE" \
+            --body-file "pr_body.md")
+          
+          PR_NUMBER=$(echo "$PR_URL" | awk -F'/' '{print $NF}')
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "Pull Request #${PR_NUMBER} created."
+
+  # JOB 2: 生成差异报告 (Build Diff Report)
+  build-report:
+    runs-on: ubuntu-latest
+    needs: update-and-create-pr
+    permissions:
+      pull-requests: write # Needed for posting the comment
+    # 仅在成功创建 PR 且版本 ID 有效时运行
+    if: needs.update-and-create-pr.outputs.pr_number && needs.update-and-create-pr.outputs.local_version_id && needs.update-and-create-pr.outputs.new_version_id
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3'
+
+      - name: Download CurseTheBeast
+        run: |
+          curl -L -o CurseTheBeast https://github.com/maxinglo/curse-the-beast/releases/download/v0.7.1/CurseTheBeast
+          chmod +x ./CurseTheBeast
+          echo "$(pwd)" >> $GITHUB_PATH
+
+      - name: Download old and new archives
+        run: |
+          PACK_ID="${{ needs.update-and-create-pr.outputs.pack_id }}"
+          LOCAL_ID="${{ needs.update-and-create-pr.outputs.local_version_id }}"
+          NEW_ID="${{ needs.update-and-create-pr.outputs.new_version_id }}"
+          
+          echo "Downloading old version (ID: $LOCAL_ID)..."
+          CurseTheBeast download $PACK_ID $LOCAL_ID -o ./old_version.zip
+          
+          echo "Downloading new version (ID: $NEW_ID)..."
+          CurseTheBeast download $PACK_ID $NEW_ID -o ./new_version.zip
+          
+      - name: Generate Diff Report
+        run: |
+          python .github/scripts/compare_archives.py old_version.zip new_version.zip -o diff_report.html
+      # 重点：不再压缩，而是上传为 Pages 产物
+      - name: Upload Report as Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./diff_report.html # 直接上传 HTML 文件
+
+  # JOB 3: 部署报告到 GitHub Pages
+  deploy-report:
+    runs-on: ubuntu-latest
+    needs: build-report
+    # 为 Pages 部署提供必要权限
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }} # 设置环境 URL
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4 # 使用官方部署 Action
+
+  # JOB 4: 将报告链接评论到 PR
+  comment-link:
+    runs-on: ubuntu-latest
+    needs: [update-and-create-pr, deploy-report] # 等待部署完成
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post Link to PR Comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.update-and-create-pr.outputs.pr_number }}
+          PAGE_URL: ${{ needs.deploy-report.outputs.page_url }} # 获取部署后的 URL
+          PACK_NAME: ${{ needs.update-and-create-pr.outputs.pack_name }}
+          NEW_VERSION: ${{ needs.update-and-create-pr.outputs.new_version }}
+        run: |
+          # 生成更友好和信息丰富的评论
+          COMMENT_BODY="📊 **自动更新报告** for **${PACK_NAME} v${NEW_VERSION}**\n\n一份详细的版本间内容差异报告已生成，您可以直接在线预览：\n\n➡️ **[点击查看交互式差异报告]($PAGE_URL)**\n\n*此报告页面由 GitHub Actions 自动部署，将在一段时间后失效。*"
+          gh pr comment $PR_NUMBER --body "$COMMENT_BODY"
+          echo "Link to diff report posted in PR #${PR_NUMBER}."

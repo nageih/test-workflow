@@ -1,11 +1,9 @@
 import asyncio
-import json
 import os
+import json
 from pprint import pprint
-
 import paratranz_client
 from pydantic import ValidationError
-
 from LangSpliter import split_and_process_all
 
 configuration = paratranz_client.Configuration(host="https://paratranz.cn/api")
@@ -28,14 +26,10 @@ async def upload_file(path, file):
         except Exception as e:
             try:
                 # 尝试解析错误信息以更新文件
-                filePath: str = json.loads(e.__dict__.get("body"))["message"].split(
-                    " "
-                )[1]
+                filePath: str = json.loads(e.__dict__.get("body"))["message"].split(" ")[1]
                 for fileName in files_response:
                     if fileName.name == filePath:
-                        await api_instance.update_file(
-                            project_id, file_id=fileName.id, file=file
-                        )
+                        await api_instance.update_file(project_id, file_id=fileName.id, file=file)
                         print(f"文件已更新！文件路径为：{fileName.name}")
             except (json.JSONDecodeError, KeyError, IndexError):
                 # 如果错误信息不是预期的格式，打印原始错误
@@ -75,7 +69,7 @@ def handle_ftb_quests_snbt():
             chapters_dir=chapters_dir,
             chapter_groups_file=chapter_groups_file,
             output_dir=output_json_dir,
-            flatten_single_lines=False,
+            flatten_single_lines=False
         )
         print("SNBT 文件已成功拆分为 JSON，准备上传。")
     else:
@@ -96,7 +90,7 @@ async def main():
         # 使用 os.path.relpath 获取相对于 'Source' 目录的正确路径
         path = os.path.relpath(os.path.dirname(file), "./Source")
 
-        # 如果文件直接位于 Source 目录下，relpath 会返回 "."，将其转换为空路径
+        # 如果文件直接位于 Source 目录下，relpath 会返回 "."，我们将其转换为空路径
         if path == ".":
             path = ""
 

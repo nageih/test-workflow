@@ -13,10 +13,10 @@ jobs:
       FILE_PATH: ./
       PROJECT_ID: ${{ vars.ID }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3"
 
@@ -26,4 +26,4 @@ jobs:
 
       - name: Upload To Paratranz
         run: |
-          python .github/scripts/github2para.py
+          python .github/workflows/github2para.py
