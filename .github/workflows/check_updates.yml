@@ -87,7 +87,7 @@ jobs:
     permissions:
       pull-requests: write # Needed for posting the comment
     # 仅在成功创建 PR 且版本 ID 有效时运行
-    if: needs.update-and-create-pr.outputs.pr_number && needs.update-and-create-pr.outputs.new_version_id
+    if: needs.update-and-create-pr.outputs.pr_number && needs.update-and-create-pr.outputs.local_version_id && needs.update-and-create-pr.outputs.new_version_id
 
     steps:
       - name: Checkout repository
@@ -119,6 +119,18 @@ jobs:
       - name: Generate Diff Report
         run: |
           python .github/scripts/compare_archives.py old_version.zip new_version.zip -o diff_report.html
+
+        # 用于符合 GitHub Pages 的目录结构
+      - name: Prepare Artifact Directory
+        run: |
+          mkdir -p report_dist
+          mv diff_report.html report_dist/index.html
+
+      - name: Upload Report as Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./report_dist
+
       # 重点：不再压缩，而是上传为 Pages 产物
       - name: Upload Report as Pages Artifact
         uses: actions/upload-pages-artifact@v3
