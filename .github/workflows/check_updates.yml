@@ -69,7 +69,6 @@ jobs:
           git commit -m "$PR_TITLE"
           git push --force -u origin $BRANCH_NAME
 
-          # Create PR and capture its number
           PR_URL=$(gh pr create \
             --base main \
             --head $BRANCH_NAME \
@@ -80,21 +79,20 @@ jobs:
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
           echo "Pull Request #${PR_NUMBER} created."
 
-  # JOB 2: 生成差异报告 (Build Diff Report)
+
+  # JOB 2: 生成差异报告
   build-report:
     runs-on: ubuntu-latest
     needs: update-and-create-pr
-    permissions:
-      pull-requests: write # Needed for posting the comment
-    # 仅在成功创建 PR 且版本 ID 有效时运行
-    if: needs.update-and-create-pr.outputs.pr_number && needs.update-and-create-pr.outputs.local_version_id && needs.update-and-create-pr.outputs.new_version_id
-
+    # 删除了对 local_version_id 的检查，更稳健
+    if: needs.update-and-create-pr.outputs.pr_number && needs.update-and-create-pr.outputs.new_version_id
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
+
         with:
           python-version: '3'
 
@@ -107,6 +105,7 @@ jobs:
       - name: Download old and new archives
         run: |
           PACK_ID="${{ needs.update-and-create-pr.outputs.pack_id }}"
+          # 如果 local_version_id 为空，会失败，这是预期的，因为无法比较
           LOCAL_ID="${{ needs.update-and-create-pr.outputs.local_version_id }}"
           NEW_ID="${{ needs.update-and-create-pr.outputs.new_version_id }}"
           
@@ -115,54 +114,66 @@ jobs:
           
           echo "Downloading new version (ID: $NEW_ID)..."
           CurseTheBeast download $PACK_ID $NEW_ID -o ./new_version.zip
-          
+
       - name: Generate Diff Report
         run: |
           python .github/scripts/compare_archives.py old_version.zip new_version.zip -o diff_report.html
-
-        # 用于符合 GitHub Pages 的目录结构
-      - name: Prepare Artifact Directory
+      
+      - name: Prepare Artifacts
         run: |
-          mkdir -p report_dist 
-          mv diff_report.html report_dist/index.html 
+          # 1. 为 GitHub Pages 创建部署目录
+          mkdir -p report_dist
+          mv diff_report.html report_dist/index.html
+          # 2. 为工作流产物存档创建一个副本，并用 PR 编号命名
+          cp report_dist/index.html diff_report_pr_${{ needs.update-and-create-pr.outputs.pr_number }}.html
 
-      - name: Upload Report as Pages Artifact
+      - name: Upload Report for Pages Deployment
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./report_dist 
+          path: ./report_dist # 上传部署目录
 
-  # JOB 3: 部署报告到 GitHub Pages
+      - name: Upload Report for Archival
+        uses: actions/upload-artifact@v4
+        with:
+          name: diff-report-pr-${{ needs.update-and-create-pr.outputs.pr_number }}
+          path: diff_report_pr_${{ needs.update-and-create-pr.outputs.pr_number }}.html
+          retention-days: 400 # 报告存档保留90天
+
+  # JOB 3: 部署报告到 GitHub Pages (此作业不变)
   deploy-report:
     runs-on: ubuntu-latest
     needs: build-report
-    # 为 Pages 部署提供必要权限
     permissions:
       pages: write
       id-token: write
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }} # 设置环境 URL
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4 # 使用官方部署 Action
+        uses: actions/deploy-pages@v4
 
   # JOB 4: 将报告链接评论到 PR
   comment-link:
     runs-on: ubuntu-latest
-    needs: [update-and-create-pr, deploy-report] # 等待部署完成
+    needs: [update-and-create-pr, deploy-report]
     permissions:
       pull-requests: write
     steps:
+      - name: Checkout repository to gain context
+        uses: actions/checkout@v4
+
       - name: Post Link to PR Comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.update-and-create-pr.outputs.pr_number }}
-          PAGE_URL: ${{ needs.deploy-report.outputs.page_url }} # 获取部署后的 URL
+          PAGE_URL: ${{ needs.deploy-report.outputs.page_url }}
           PACK_NAME: ${{ needs.update-and-create-pr.outputs.pack_name }}
           NEW_VERSION: ${{ needs.update-and-create-pr.outputs.new_version }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
-          # 生成更友好和信息丰富的评论
-          COMMENT_BODY="📊 **自动更新报告** for **${PACK_NAME} v${NEW_VERSION}**\n\n一份详细的版本间内容差异报告已生成，您可以直接在线预览：\n\n➡️ **[点击查看交互式差异报告]($PAGE_URL)**\n\n*此报告页面由 GitHub Actions 自动部署，将在一段时间后失效。*"
+          # 生成一个包含在线预览和存档链接的评论
+          COMMENT_BODY="📊 **自动更新报告** for **${PACK_NAME} v${NEW_VERSION}**\n\n一份详细的版本间内容差异报告已生成。\n\n- ➡️ **[点击此处，在线预览交互式报告]($PAGE_URL)**\n- 📄 **[点击此处，下载报告存档]( $RUN_URL#artifacts)**\n\n*在线预览页面总是显示最新PR的报告，而存档文件与本次运行永久绑定。*"
           gh pr comment $PR_NUMBER --body "$COMMENT_BODY"
           echo "Link to diff report posted in PR #${PR_NUMBER}."
