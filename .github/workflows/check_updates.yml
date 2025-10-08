@@ -87,7 +87,7 @@ jobs:
     permissions:
       pull-requests: write # Needed for posting the comment
     # 仅在成功创建 PR 且版本 ID 有效时运行
-    if: needs.update-and-create-pr.outputs.pr_number && needs.update-and-create-pr.outputs.local_version_id && needs.update-and-create-pr.outputs.new_version_id
+    if: needs.update-and-create-pr.outputs.pr_number && needs.update-and-create-pr.outputs.new_version_id
 
     steps:
       - name: Checkout repository
